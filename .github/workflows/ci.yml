@@ -429,6 +429,10 @@ jobs:
         env:
           LIBREDB_LIVE_POSTGRES_URL: postgresql://postgres:contract@127.0.0.1:55432/postgres?sslmode=disable
 
+      - name: PostgreSQL agent read-only live check
+        # This tests the read-only execution profile
+        run: bun tests/live/postgres-read-only-live.ts
+
       - name: Install Playwright browsers
         # chromium only and no --with-deps: ubuntu-latest ships Google Chrome,
         # so chromium's shared libraries are already present, and this job runs
