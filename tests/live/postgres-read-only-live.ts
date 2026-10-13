@@ -5,12 +5,21 @@
  * 1. A direct write statement (INSERT) is rejected by PostgreSQL's read-only transaction bounds.
  * 2. A multi-command statement string (separated by ';') is rejected before/by the server.
  * 3. The underlying database data remains untouched.
+ *
+ * It is NOT in `bun run test`: the runner excludes `tests/live/` by name (`EXCLUDED` in
+ * `tests/runner/discover.ts`). CI runs it in the "Functional Smoke (PostgreSQL, RabbitMQ)" job of
+ * .github/workflows/ci.yml, and loop/scripts/functional-smoke.sh runs it locally. It needs Docker
+ * and nothing else:
+ *
+ *   bun tests/live/postgres-read-only-live.ts
+ *
+ * The port is not e2e/functional-smoke.spec.ts's 54329, so the two containers never collide.
  */
 import { execFileSync } from "node:child_process";
 import { acquireExecutionProfileProvider } from "@/lib/db/factory";
 
 const PG_CONTAINER = "libredb-live-readonly-pg";
-const PG_PORT = 54329;
+const PG_PORT = 54332;
 const PG_ADMIN_PASSWORD = "smoke-pg-password";
 const AGENT_USER = "agent_readonly";
 const AGENT_PASSWORD = "smoke-agent-password";
@@ -61,7 +70,11 @@ async function startSeededPostgres(): Promise<void> {
   let lastError: unknown;
   for (let i = 0; i < 60 && !seeded; i++) {
     try {
-      docker(["exec", PG_CONTAINER, "psql", "-U", "postgres", "-d", "postgres", "-c", seedSql]);
+      // Over TCP, not the Unix socket: the image's first start runs a temporary socket-only server,
+      // stops it and starts the real one, so a seed over the socket can succeed before the restart
+      // and the provider's TCP connect then lands in it ("Connection terminated unexpectedly").
+      docker(["exec", PG_CONTAINER, "pg_isready", "-q", "-h", "127.0.0.1", "-p", "5432", "-U", "postgres"]);
+      docker(["exec", PG_CONTAINER, "psql", "-h", "127.0.0.1", "-U", "postgres", "-d", "postgres", "-c", seedSql]);
       seeded = true;
     } catch (err) {
       lastError = err;
@@ -137,7 +150,8 @@ async function main(): Promise<void> {
   } catch (error) {
     console.error("FAIL live PostgreSQL agent read-only check");
     console.error(error);
-    process.exit(1);
+    // exitCode, not process.exit(1): exit would skip the finally below and leave the container running.
+    process.exitCode = 1;
   } finally {
     try {
       docker(["rm", "-f", PG_CONTAINER]);
